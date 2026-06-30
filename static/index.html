@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>厦门旅游 - 发现海上花园之美</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header class="header">
+        <nav class="nav">
+            <div class="container nav-content">
+                <h1 class="logo">厦门旅游</h1>
+                <ul class="nav-links">
+                    <li><a href="#home" class="active">首页</a></li>
+                    <li><a href="#attractions">景点</a></li>
+                    <li><a href="#weather">天气</a></li>
+                    <li><a href="#routes">路线</a></li>
+                    <li><a href="#about">关于</a></li>
+                </ul>
+            </div>
+        </nav>
+        <div class="hero" id="home">
+            <div class="hero-content">
+                <h2>发现厦门之美</h2>
+                <p>一座充满魅力的海滨城市，等你来探索</p>
+                <div class="weather-summary" id="weather-summary">
+                    <span class="weather-loading">加载天气中...</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="main">
+        <section class="section" id="attractions">
+            <div class="container">
+                <h2 class="section-title">热门景点</h2>
+                
+                <div class="filters">
+                    <div class="filter-group">
+                        <input type="text" id="search-input" placeholder="搜索景点..." class="search-input">
+                    </div>
+                    <div class="filter-group">
+                        <select id="area-filter" class="filter-select">
+                            <option value="">全部区域</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <select id="sort-filter" class="filter-select">
+                            <option value="popularity">热度最高</option>
+                            <option value="rating">评分最高</option>
+                            <option value="name">名称排序</option>
+                            <option value="favorite_count">收藏最多</option>
+                        </select>
+                    </div>
+                    <div class="filter-group tags-filter" id="tags-filter">
+                    </div>
+                </div>
+
+                <div class="attractions-grid" id="attractions-grid">
+                    <div class="loading">加载景点中...</div>
+                </div>
+
+                <div class="pagination" id="pagination">
+                </div>
+            </div>
+        </section>
+
+        <section class="section" id="weather">
+            <div class="container">
+                <h2 class="section-title">厦门实时天气</h2>
+                <div class="weather-card" id="weather-card">
+                    <div class="weather-loading">加载天气数据...</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section" id="routes">
+            <div class="container">
+                <h2 class="section-title">智能路线推荐</h2>
+                <div class="route-form">
+                    <div class="form-group">
+                        <label>偏好主题：</label>
+                        <div class="checkbox-group" id="theme-options">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>游玩时长：</label>
+                        <select id="duration-select" class="filter-select">
+                            <option value="120">2小时</option>
+                            <option value="240" selected>半天</option>
+                            <option value="480">全天</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" id="recommend-btn">获取推荐</button>
+                </div>
+                <div class="recommendation-result" id="recommendation-result">
+                </div>
+            </div>
+        </section>
+
+        <section class="section" id="about">
+            <div class="container">
+                <h2 class="section-title">关于项目</h2>
+                <div class="about-content">
+                    <p>这是一个基于 Flask + SQLite 的厦门旅游宣传单页应用。</p>
+                    <ul class="feature-list">
+                        <li>景点数据动态加载</li>
+                        <li>实时天气查询</li>
+                        <li>评论与收藏功能</li>
+                        <li>智能路线推荐</li>
+                        <li>响应式设计</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2026 厦门旅游 - 谷雨大模型实验室 AI Coding 面试</p>
+        </div>
+    </footer>
+
+    <div class="modal" id="attraction-modal">
+        <div class="modal-content">
+            <span class="modal-close">&times;</span>
+            <div class="modal-body" id="modal-body">
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast">
+        <span class="toast-message"></span>
+    </div>
+
+    <script src="/static/js/main.js"></script>
+</body>
+</html>
