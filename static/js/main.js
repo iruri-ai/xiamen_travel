@@ -8,12 +8,59 @@ let currentFilters = {
 };
 let selectedTags = [];
 let currentAttractionId = null;
-let userId = localStorage.getItem('user_id') || generateUserId();
+let currentUser = null;
 
-function generateUserId() {
-    const id = 'user_' + Math.random().toString(36).substr(2, 9);
-    localStorage.setItem('user_id', id);
-    return id;
+function loadCurrentUser() {
+    const token = localStorage.getItem('access_token');
+    if (token) {
+        fetch(`${API_BASE}/auth/me`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.code === 200) {
+                currentUser = data.data;
+                updateAuthUI();
+            } else {
+                clearAuth();
+            }
+        })
+        .catch(() => {
+            clearAuth();
+        });
+    }
+}
+
+function updateAuthUI() {
+    const loginBtn = document.getElementById('login-btn');
+    const registerBtn = document.getElementById('register-btn');
+    const userMenu = document.getElementById('user-menu');
+    const userName = document.getElementById('user-name');
+    const adminBtn = document.getElementById('admin-attraction-btn');
+    
+    if (currentUser) {
+        loginBtn.style.display = 'none';
+        registerBtn.style.display = 'none';
+        userMenu.style.display = 'flex';
+        userName.textContent = currentUser.nickname || currentUser.username;
+        
+        if (currentUser.role === 'admin') {
+            adminBtn.style.display = 'block';
+        } else {
+            adminBtn.style.display = 'none';
+        }
+    } else {
+        loginBtn.style.display = 'block';
+        registerBtn.style.display = 'block';
+        userMenu.style.display = 'none';
+    }
+}
+
+function clearAuth() {
+    currentUser = null;
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    updateAuthUI();
 }
 
 const api = {
@@ -28,7 +75,12 @@ const api = {
         }
         const query = urlParams.toString();
         const url = `${API_BASE}${path}${query ? '?' + query : ''}`;
-        const response = await fetch(url);
+        const token = localStorage.getItem('access_token');
+        const headers = {};
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+        const response = await fetch(url, { headers });
         const data = await response.json();
         if (data.code !== 200) {
             throw new Error(data.message || 'API Error');
@@ -37,9 +89,14 @@ const api = {
     },
     
     async post(path, body) {
+        const token = localStorage.getItem('access_token');
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
         const response = await fetch(`${API_BASE}${path}`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             body: JSON.stringify(body)
         });
         const data = await response.json();
@@ -50,14 +107,57 @@ const api = {
     },
     
     async delete(path) {
+        const token = localStorage.getItem('access_token');
+        const headers = {};
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
         const response = await fetch(`${API_BASE}${path}`, {
-            method: 'DELETE'
+            method: 'DELETE',
+            headers
         });
         const data = await response.json();
         if (data.code !== 200) {
             throw new Error(data.message || 'API Error');
         }
         return data;
+    },
+    
+    async put(path, body) {
+        const token = localStorage.getItem('access_token');
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+        const response = await fetch(`${API_BASE}${path}`, {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify(body)
+        });
+        const data = await response.json();
+        if (data.code !== 200) {
+            throw new Error(data.message || 'API Error');
+        }
+        return data;
+    },
+
+    async authPost(path, body) {
+        const response = await fetch(`${API_BASE}${path}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        return await response.json();
+    },
+
+    async authGet(path) {
+        const token = localStorage.getItem('access_token');
+        const response = await fetch(`${API_BASE}${path}`, {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+        return await response.json();
     }
 };
 
@@ -254,16 +354,21 @@ async function showAttractionDetail(id) {
         const attr = attrResult.data;
         const comments = commentsResult.data.items || [];
         
-        const commentHtml = comments.length > 0 ? comments.map(c => `
-            <div class="comment-item">
+        const commentHtml = comments.length > 0 ? comments.map(c => {
+            const isOwn = currentUser && c.user_id === currentUser.id;
+            const deleteBtn = isOwn ? `<button class="comment-delete-btn" onclick="deleteComment(${c.id})">删除</button>` : '';
+            return `
+            <div class="comment-item" id="comment-${c.id}" data-user-id="${c.user_id}">
                 <div class="comment-header">
                     <span class="comment-user">${c.username}</span>
                     <span class="comment-rating">${c.rating_stars}</span>
+                    ${deleteBtn}
                 </div>
                 <p>${c.content}</p>
                 <div class="comment-time">${c.formatted_time}</div>
             </div>
-        `).join('') : '<p style="color:#999;">暂无评论</p>';
+            `;
+        }).join('') : '<p style="color:#999;">暂无评论</p>';
         
         body.innerHTML = `
             <img src="${attr.image}" alt="${attr.name}" class="modal-image">
@@ -313,10 +418,27 @@ async function showAttractionDetail(id) {
     }
 }
 
+function getAuthUserId() {
+    return currentUser ? currentUser.id : localStorage.getItem('user_id') || generateAnonymousId();
+}
+
+function generateAnonymousId() {
+    const id = 'anon_' + Math.random().toString(36).substr(2, 9);
+    localStorage.setItem('user_id', id);
+    return id;
+}
+
 async function toggleFavorite(attractionId) {
+    if (!currentUser) {
+        showToast('请先登录');
+        document.getElementById('login-btn').click();
+        return;
+    }
+    
     try {
         const btn = document.getElementById(`fav-btn-${attractionId}`);
         const isFavorited = btn.textContent === '已收藏';
+        const userId = currentUser.id;
         
         if (isFavorited) {
             const favorites = await api.get('/favorites', { user_id: userId });
@@ -340,7 +462,14 @@ async function toggleFavorite(attractionId) {
 }
 
 async function checkFavoriteStatus(attractionId) {
+    if (!currentUser) {
+        const btn = document.getElementById(`fav-btn-${attractionId}`);
+        if (btn) btn.textContent = '收藏';
+        return;
+    }
+    
     try {
+        const userId = currentUser.id;
         const result = await api.get('/favorites', { user_id: userId });
         const isFavorited = result.data.some(f => f.attraction_id === attractionId);
         const btn = document.getElementById(`fav-btn-${attractionId}`);
@@ -353,6 +482,12 @@ async function checkFavoriteStatus(attractionId) {
 }
 
 async function submitComment(attractionId) {
+    if (!currentUser) {
+        showToast('请先登录');
+        document.getElementById('login-btn').click();
+        return;
+    }
+    
     const input = document.getElementById('comment-input');
     const rating = document.getElementById('rating-input');
     const content = input.value.trim();
@@ -365,7 +500,8 @@ async function submitComment(attractionId) {
     try {
         const result = await api.post('/comments', {
             attraction_id: attractionId,
-            username: '游客',
+            user_id: currentUser.id,
+            username: currentUser.nickname || currentUser.username,
             content: content,
             rating: parseInt(rating.value)
         });
@@ -375,11 +511,13 @@ async function submitComment(attractionId) {
         
         const comment = result.data;
         const commentList = document.getElementById('comment-list');
+        const deleteBtn = `<button class="comment-delete-btn" onclick="deleteComment(${comment.id})">删除</button>`;
         const newComment = `
-            <div class="comment-item">
+            <div class="comment-item" id="comment-${comment.id}" data-user-id="${currentUser?.id || ''}">
                 <div class="comment-header">
                     <span class="comment-user">${comment.username}</span>
                     <span class="comment-rating">${comment.rating_stars}</span>
+                    ${deleteBtn}
                 </div>
                 <p>${comment.content}</p>
                 <div class="comment-time">${comment.formatted_time}</div>
@@ -390,6 +528,32 @@ async function submitComment(attractionId) {
     } catch (error) {
         showToast(error.message);
     }
+}
+
+async function deleteComment(commentId) {
+    if (!confirm('确定要删除这条评论吗？')) {
+        return;
+    }
+    
+    try {
+        await api.delete(`/comments/${commentId}`);
+        showToast('评论删除成功');
+        
+        const commentEl = document.getElementById(`comment-${commentId}`);
+        if (commentEl) {
+            commentEl.remove();
+        }
+    } catch (error) {
+        showToast(error.message || '删除失败');
+    }
+}
+
+function refreshCommentNicknames(newNickname) {
+    if (!currentUser) return;
+    
+    document.querySelectorAll('.comment-item[data-user-id="' + currentUser.id + '"] .comment-user').forEach(el => {
+        el.textContent = newNickname;
+    });
 }
 
 let currentWeatherData = null;
@@ -465,6 +629,12 @@ async function loadWeather() {
 }
 
 async function getRecommendation() {
+    if (!currentUser) {
+        showToast('请先登录');
+        document.getElementById('login-btn').click();
+        return;
+    }
+    
     const resultEl = document.getElementById('recommendation-result');
     const themes = [];
     
@@ -481,7 +651,7 @@ async function getRecommendation() {
         let recommendation;
         try {
             const result = await api.post('/routes/llm/recommend', {
-                preferences: { themes, duration: parseInt(duration), travel_style: '随意' },
+                preferences: { themes, duration: duration, travel_style: '随意' },
                 weather: currentWeatherData || {}
             });
             recommendation = result.data;
@@ -489,7 +659,7 @@ async function getRecommendation() {
             console.warn('LLM推荐失败，使用备用接口:', e);
             const result = await api.get('/routes/recommend', { 
                 theme: themes[0] || '', 
-                duration: parseInt(duration) 
+                duration: duration 
             });
             recommendation = result.data;
         }
@@ -601,4 +771,523 @@ document.addEventListener('DOMContentLoaded', () => {
             this.classList.add('active');
         });
     });
+
+    loadCurrentUser();
+
+    initAuthModal();
 });
+
+function initAuthModal() {
+    const authModal = document.getElementById('auth-modal');
+    const loginBtn = document.getElementById('login-btn');
+    const registerBtn = document.getElementById('register-btn');
+    const authClose = document.querySelector('.auth-close');
+    const tabLogin = document.getElementById('tab-login');
+    const tabRegister = document.getElementById('tab-register');
+    const formLogin = document.getElementById('form-login');
+    const formRegister = document.getElementById('form-register');
+    const linkToRegister = document.getElementById('link-to-register');
+    const linkToLogin = document.getElementById('link-to-login');
+    const submitLogin = document.getElementById('submit-login');
+    const submitRegister = document.getElementById('submit-register');
+    const logoutBtn = document.getElementById('logout-btn');
+
+    function showAuthModal() {
+        authModal.classList.add('show');
+    }
+
+    function hideAuthModal() {
+        authModal.classList.remove('show');
+        clearFormErrors();
+    }
+
+    function switchToLogin() {
+        tabLogin.classList.add('active');
+        tabRegister.classList.remove('active');
+        formLogin.style.display = 'block';
+        formRegister.style.display = 'none';
+        clearFormErrors();
+    }
+
+    function switchToRegister() {
+        tabRegister.classList.add('active');
+        tabLogin.classList.remove('active');
+        formRegister.style.display = 'block';
+        formLogin.style.display = 'none';
+        clearFormErrors();
+    }
+
+    function clearFormErrors() {
+        document.querySelectorAll('.form-error').forEach(el => el.textContent = '');
+    }
+
+    function showFieldError(fieldId, message) {
+        document.getElementById(fieldId).textContent = message;
+    }
+
+    loginBtn.addEventListener('click', showAuthModal);
+    registerBtn.addEventListener('click', () => {
+        showAuthModal();
+        switchToRegister();
+    });
+    authClose.addEventListener('click', hideAuthModal);
+    authModal.addEventListener('click', (e) => {
+        if (e.target === authModal) {
+            hideAuthModal();
+        }
+    });
+
+    tabLogin.addEventListener('click', switchToLogin);
+    tabRegister.addEventListener('click', switchToRegister);
+    linkToRegister.addEventListener('click', (e) => {
+        e.preventDefault();
+        switchToRegister();
+    });
+    linkToLogin.addEventListener('click', (e) => {
+        e.preventDefault();
+        switchToLogin();
+    });
+
+    submitLogin.addEventListener('click', async () => {
+        clearFormErrors();
+        const username = document.getElementById('login-username').value.trim();
+        const password = document.getElementById('login-password').value;
+
+        if (!username) {
+            showFieldError('login-username-error', '请输入用户名或邮箱');
+            return;
+        }
+        if (!password) {
+            showFieldError('login-password-error', '请输入密码');
+            return;
+        }
+
+        const result = await api.authPost('/auth/login', { username, password });
+        if (result.code === 200) {
+            localStorage.setItem('access_token', result.data.access_token);
+            localStorage.setItem('refresh_token', result.data.refresh_token);
+            currentUser = result.data.user;
+            updateAuthUI();
+            hideAuthModal();
+            showToast('登录成功');
+        } else {
+            showFieldError('login-password-error', result.message);
+        }
+    });
+
+    submitRegister.addEventListener('click', async () => {
+        clearFormErrors();
+        const username = document.getElementById('reg-username').value.trim();
+        const email = document.getElementById('reg-email').value.trim();
+        const password = document.getElementById('reg-password').value;
+        const confirm = document.getElementById('reg-confirm').value;
+
+        if (!username) {
+            showFieldError('reg-username-error', '请输入用户名');
+            return;
+        }
+        if (username.length < 2 || username.length > 50) {
+            showFieldError('reg-username-error', '用户名长度必须在2-50个字符之间');
+            return;
+        }
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            showFieldError('reg-email-error', '邮箱格式不正确');
+            return;
+        }
+        if (!password) {
+            showFieldError('reg-password-error', '请输入密码');
+            return;
+        }
+        if (password.length < 6) {
+            showFieldError('reg-password-error', '密码长度至少6位');
+            return;
+        }
+        if (password !== confirm) {
+            showFieldError('reg-confirm-error', '两次输入的密码不一致');
+            return;
+        }
+
+        const result = await api.authPost('/auth/register', { 
+            username, 
+            email: email || undefined, 
+            password 
+        });
+        if (result.code === 200) {
+            localStorage.setItem('access_token', result.data.access_token);
+            localStorage.setItem('refresh_token', result.data.refresh_token);
+            currentUser = result.data.user;
+            updateAuthUI();
+            hideAuthModal();
+            showToast('注册成功');
+        } else {
+            if (result.message.includes('用户名')) {
+                showFieldError('reg-username-error', result.message);
+            } else if (result.message.includes('邮箱')) {
+                showFieldError('reg-email-error', result.message);
+            } else {
+                showFieldError('reg-password-error', result.message);
+            }
+        }
+    });
+
+    logoutBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        clearAuth();
+        showToast('已退出登录');
+    });
+
+    document.getElementById('user-profile').addEventListener('click', async (e) => {
+        e.preventDefault();
+        openProfileModal();
+    });
+
+    document.getElementById('user-favorites').addEventListener('click', async (e) => {
+        e.preventDefault();
+        openFavoritesModal();
+    });
+
+    document.getElementById('user-comments').addEventListener('click', async (e) => {
+        e.preventDefault();
+        openCommentsModal();
+    });
+
+    document.getElementById('admin-attraction-btn').addEventListener('click', async (e) => {
+        e.preventDefault();
+        openAdminAttractionModal();
+    });
+}
+
+function openModal(modalId) {
+    const modal = document.getElementById(modalId);
+    if (modal) {
+        modal.style.display = 'flex';
+        modal.classList.add('show');
+    }
+}
+
+function closeModal(modalId) {
+    const modal = document.getElementById(modalId);
+    if (modal) {
+        modal.style.display = 'none';
+        modal.classList.remove('show');
+    }
+}
+
+async function openProfileModal() {
+    openModal('profile-modal');
+    const content = document.getElementById('profile-content');
+    content.innerHTML = '<p>加载中...</p>';
+    
+    try {
+        const user = currentUser;
+        if (!user) {
+            content.innerHTML = '<p>请先登录</p>';
+            return;
+        }
+        
+        const result = await api.get('/auth/me');
+        const profile = result.data || user;
+        
+        const displayName = profile.nickname || profile.username || '未设置';
+        
+        content.innerHTML = `
+            <div class="profile-info">
+                <div class="profile-row">
+                    <span class="profile-label">昵称</span>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <span class="profile-value">${displayName}</span>
+                        <button class="btn btn-sm btn-outline" onclick="editNickname('${profile.nickname || ''}')">修改</button>
+                    </div>
+                </div>
+                <div class="profile-row">
+                    <span class="profile-label">登录账号</span>
+                    <span class="profile-value">${profile.username || '-'}</span>
+                </div>
+                <div class="profile-row">
+                    <span class="profile-label">邮箱</span>
+                    <span class="profile-value">${profile.email || '-'}</span>
+                </div>
+                <div class="profile-row">
+                    <span class="profile-label">角色</span>
+                    <span class="profile-value">${profile.role === 'admin' ? '管理员' : '普通用户'}</span>
+                </div>
+                <div class="profile-row">
+                    <span class="profile-label">注册时间</span>
+                    <span class="profile-value">${profile.created_at ? profile.created_at.split(' ')[0] : '-'}</span>
+                </div>
+            </div>
+        `;
+    } catch (error) {
+        content.innerHTML = `<p>加载失败：${error.message}</p>`;
+    }
+}
+
+async function editNickname(currentNickname) {
+    const newNickname = prompt('请输入新昵称:', currentNickname);
+    if (newNickname === null) {
+        return;
+    }
+    
+    const trimmed = newNickname.trim();
+    if (!trimmed) {
+        showToast('昵称不能为空');
+        return;
+    }
+    
+    if (trimmed.length > 50) {
+        showToast('昵称长度不能超过50个字符');
+        return;
+    }
+    
+    try {
+        const result = await api.put('/auth/profile', { nickname: trimmed });
+        if (result.code === 200) {
+            showToast('昵称修改成功');
+            currentUser.nickname = trimmed;
+            openProfileModal();
+            
+            const userNameEl = document.getElementById('user-name');
+            if (userNameEl) {
+                userNameEl.textContent = trimmed;
+            }
+            
+            refreshCommentNicknames(trimmed);
+        } else {
+            showToast(result.message || '修改失败');
+        }
+    } catch (error) {
+        showToast(error.message || '修改失败');
+    }
+}
+
+async function openFavoritesModal() {
+    openModal('favorites-modal');
+    const content = document.getElementById('favorites-content');
+    content.innerHTML = '<p>加载中...</p>';
+    
+    try {
+        const result = await api.get('/favorites');
+        const favorites = result.data || [];
+        
+        if (favorites.length === 0) {
+            content.innerHTML = '<p style="color:#999;">暂无收藏</p>';
+            return;
+        }
+        
+        content.innerHTML = `
+            <div class="favorites-list">
+                ${favorites.map(f => `
+                    <div class="favorite-item" id="favorite-${f.id}">
+                        <img src="${f.image_url || '/static/images/default.jpg'}" class="favorite-image" alt="${f.attraction_name}">
+                        <div class="favorite-info">
+                            <div class="favorite-name">${f.attraction_name}</div>
+                            <div class="favorite-address">${f.address || ''}</div>
+                            <div class="favorite-rating">${'★'.repeat(Math.round(f.rating || 0))} ${f.rating || 0}</div>
+                        </div>
+                        <div class="favorite-actions">
+                            <button class="btn btn-sm" onclick="showAttractionDetail(${f.attraction_id}); closeModal('favorites-modal')">查看</button>
+                            <button class="btn btn-sm btn-outline" onclick="removeFavorite(${f.id})">取消收藏</button>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    } catch (error) {
+        content.innerHTML = `<p>加载失败：${error.message}</p>`;
+    }
+}
+
+async function removeFavorite(favoriteId) {
+    if (!confirm('确定取消收藏吗？')) {
+        return;
+    }
+    
+    try {
+        await api.delete(`/favorites/${favoriteId}`);
+        showToast('取消收藏成功');
+        
+        const favoriteEl = document.getElementById(`favorite-${favoriteId}`);
+        if (favoriteEl) {
+            favoriteEl.remove();
+        }
+    } catch (error) {
+        showToast(error.message || '操作失败');
+    }
+}
+
+async function openCommentsModal() {
+    openModal('comments-modal');
+    const content = document.getElementById('comments-content');
+    content.innerHTML = '<p>加载中...</p>';
+    
+    try {
+        const result = await api.get('/comments', { user_id: currentUser?.id });
+        const comments = result.data?.items || [];
+        
+        if (comments.length === 0) {
+            content.innerHTML = '<p style="color:#999;">暂无评论</p>';
+            return;
+        }
+        
+        content.innerHTML = `
+            <div class="comments-list">
+                ${comments.map(c => `
+                    <div class="comment-item" id="comment-${c.id}" data-user-id="${c.user_id}">
+                        <div style="flex:1;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+                                <span style="font-weight:bold;">${c.attraction_name || '未知景点'}</span>
+                                <span>${c.rating_stars}</span>
+                            </div>
+                            <div style="margin-bottom:5px;">
+                                <span class="comment-user" style="font-size:14px; color:var(--text-secondary);">${c.username}</span>
+                            </div>
+                            <p style="margin-bottom:5px;">${c.content}</p>
+                            <div style="color:var(--text-secondary); font-size:14px;">${c.formatted_time}</div>
+                        </div>
+                        <div class="comment-actions">
+                            <button class="btn btn-sm" onclick="showAttractionDetail(${c.attraction_id}); closeModal('comments-modal')">查看景点</button>
+                        <button class="btn btn-sm btn-outline" onclick="deleteComment(${c.id})">删除</button>
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+    } catch (error) {
+        content.innerHTML = `<p>加载失败：${error.message}</p>`;
+    }
+}
+
+async function openAdminAttractionModal() {
+    if (!currentUser || currentUser.role !== 'admin') {
+        showToast('无管理员权限');
+        return;
+    }
+    openModal('admin-attraction-modal');
+    await loadAdminAttractionList();
+}
+
+async function loadAdminAttractionList() {
+    const list = document.getElementById('admin-attraction-list');
+    try {
+        const result = await api.get('/attractions?per_page=100');
+        const attractions = result.data.items;
+        
+        if (attractions.length === 0) {
+            list.innerHTML = '<p>暂无景点</p>';
+            return;
+        }
+        
+        list.innerHTML = attractions.map(attr => `
+            <div class="admin-item">
+                <div>
+                    <span style="font-weight:bold;">${attr.name}</span>
+                    <span style="color:var(--text-secondary); font-size:14px; margin-left:10px;">${attr.area || '-'}</span>
+                    <span style="color:var(--text-secondary); font-size:14px; margin-left:10px;">¥${attr.price}</span>
+                </div>
+                <div class="admin-item-actions">
+                    <button class="btn btn-sm" onclick="editAttraction(${attr.id})">编辑</button>
+                    <button class="btn btn-sm btn-outline" onclick="deleteAttractionAdmin(${attr.id})">删除</button>
+                </div>
+            </div>
+        `).join('');
+    } catch (error) {
+        list.innerHTML = `<p>加载失败：${error.message}</p>`;
+    }
+}
+
+function showAttractionForm(attraction = null) {
+    const form = document.getElementById('admin-attraction-form');
+    const title = document.getElementById('admin-attraction-title');
+    
+    if (attraction) {
+        document.getElementById('form-attraction-id').value = attraction.id;
+        document.getElementById('form-name').value = attraction.name || '';
+        document.getElementById('form-description').value = attraction.desc || attraction.description || '';
+        document.getElementById('form-image_url').value = attraction.image || attraction.image_url || '';
+        document.getElementById('form-address').value = attraction.address || '';
+        document.getElementById('form-open_time').value = attraction.open_time || '';
+        document.getElementById('form-recommended_duration').value = attraction.recommended_duration || 120;
+        document.getElementById('form-area').value = attraction.area || '';
+        document.getElementById('form-price').value = attraction.price || 0;
+        document.getElementById('form-tags').value = (attraction.tag_names || []).join(',');
+        document.getElementById('form-rating').value = attraction.rating || 5.0;
+        title.textContent = '编辑景点';
+    } else {
+        document.getElementById('form-attraction-id').value = '';
+        document.getElementById('form-name').value = '';
+        document.getElementById('form-description').value = '';
+        document.getElementById('form-image_url').value = '';
+        document.getElementById('form-address').value = '';
+        document.getElementById('form-open_time').value = '';
+        document.getElementById('form-recommended_duration').value = 120;
+        document.getElementById('form-area').value = '';
+        document.getElementById('form-price').value = 0;
+        document.getElementById('form-tags').value = '';
+        document.getElementById('form-rating').value = 5.0;
+        title.textContent = '添加景点';
+    }
+    
+    form.style.display = 'block';
+    form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function cancelAttractionForm() {
+    document.getElementById('admin-attraction-form').style.display = 'none';
+    document.getElementById('admin-attraction-title').textContent = '景点管理';
+}
+
+async function editAttraction(id) {
+    try {
+        const result = await api.get(`/attractions/${id}`);
+        showAttractionForm(result.data);
+    } catch (error) {
+        showToast(error.message);
+    }
+}
+
+async function saveAttraction() {
+    const id = document.getElementById('form-attraction-id').value;
+    const tagsInput = document.getElementById('form-tags').value;
+    const tags = tagsInput.split(',').map(t => t.trim()).filter(t => t);
+    
+    const data = {
+        name: document.getElementById('form-name').value,
+        description: document.getElementById('form-description').value,
+        image_url: document.getElementById('form-image_url').value,
+        address: document.getElementById('form-address').value,
+        open_time: document.getElementById('form-open_time').value,
+        recommended_duration: parseInt(document.getElementById('form-recommended_duration').value) || 120,
+        area: document.getElementById('form-area').value,
+        price: parseFloat(document.getElementById('form-price').value) || 0,
+        rating: parseFloat(parseFloat(document.getElementById('form-rating').value).toFixed(1)) || 5.0,
+        tags: tags
+    };
+    
+    try {
+        if (id) {
+            await api.put(`/attractions/${id}`, data);
+            showToast('景点更新成功');
+        } else {
+            await api.post('/attractions', data);
+            showToast('景点创建成功');
+        }
+        cancelAttractionForm();
+        await loadAdminAttractionList();
+    } catch (error) {
+        showToast(error.message);
+    }
+}
+
+async function deleteAttractionAdmin(id) {
+    if (!confirm('确定要删除这个景点吗？删除后将无法恢复，且相关的评论、收藏也会被删除。')) {
+        return;
+    }
+    
+    try {
+        await api.delete(`/attractions/${id}`);
+        showToast('景点删除成功');
+        await loadAdminAttractionList();
+    } catch (error) {
+        showToast(error.message);
+    }
+}

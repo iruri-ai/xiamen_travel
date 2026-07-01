@@ -1,13 +1,15 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, g
 import uuid
 from database import get_db_connection
+from middleware.auth import login_required
 
 favorites_bp = Blueprint('favorites', __name__)
 
 @favorites_bp.route('', methods=['GET'])
+@login_required
 def get_favorites():
     try:
-        user_id = request.args.get('user_id', 'anonymous')
+        user_id = g.current_user_id
         
         conn = get_db_connection()
         
@@ -37,6 +39,7 @@ def get_favorites():
         }), 500
 
 @favorites_bp.route('', methods=['POST'])
+@login_required
 def add_favorite():
     try:
         data = request.get_json()
@@ -50,7 +53,7 @@ def add_favorite():
             }), 400
         
         attraction_id = data.get('attraction_id')
-        user_id = data.get('user_id', 'anonymous')
+        user_id = g.current_user_id
         
         if not attraction_id or not isinstance(attraction_id, int) or attraction_id <= 0:
             return jsonify({
@@ -88,8 +91,8 @@ def add_favorite():
             }), 409
         
         cursor = conn.execute('''
-            INSERT INTO favorites (attraction_id, user_id)
-            VALUES (?, ?)
+            INSERT INTO favorites (attraction_id, user_id, created_at)
+            VALUES (?, ?, datetime('now', 'localtime'))
         ''', (attraction_id, user_id))
         
         conn.commit()
@@ -113,6 +116,7 @@ def add_favorite():
         }), 500
 
 @favorites_bp.route('/<int:favorite_id>', methods=['DELETE'])
+@login_required
 def delete_favorite(favorite_id):
     try:
         conn = get_db_connection()
@@ -128,8 +132,8 @@ def delete_favorite(favorite_id):
                 'request_id': str(uuid.uuid4())
             }), 404
         
-        user_id = request.args.get('user_id', 'anonymous')
-        if favorite['user_id'] != user_id and user_id != 'admin':
+        user_id = g.current_user_id
+        if favorite['user_id'] != user_id:
             conn.close()
             return jsonify({
                 'code': 403,

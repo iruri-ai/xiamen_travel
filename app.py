@@ -59,10 +59,37 @@ def get_logs():
         'request_id': str(uuid.uuid4())
     })
 
+@app.route('/api/test_update', methods=['PUT'])
+def test_update():
+    from database import get_db_connection
+    
+    data = request.get_json()
+    user_id = data.get('user_id', 1)
+    nickname = data.get('nickname', 'test_nickname')
+    
+    conn = get_db_connection()
+    
+    cursor = conn.execute('UPDATE comments SET username = ? WHERE user_id = ?', (nickname, user_id))
+    updated_count = cursor.rowcount
+    
+    conn.commit()
+    conn.close()
+    
+    return jsonify({
+        'code': 200,
+        'message': 'test update done',
+        'data': {
+            'user_id': user_id,
+            'nickname': nickname,
+            'comments_updated': updated_count
+        },
+        'request_id': str(uuid.uuid4())
+    })
+
 from routes import register_blueprints
 register_blueprints(app)
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
-    debug = False
+    debug = True
     app.run(host='0.0.0.0', port=port, debug=debug)

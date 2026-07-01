@@ -1,17 +1,40 @@
 # 环境变量（重点阻止密钥上传）
 .env
+.env.*
+!.env.example
 
 # 虚拟环境（绝对不要上传）
 venv/
+.venv/
+env/
+ENV/
 
-# 缓存文件
+# 第三方库打包/解压目录（你截图里的 py_modules 在这里屏蔽）
+py_modules/
+*.dist-info/
+*.whl
+*.tar.gz
+
+# Python 缓存文件
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+py.typed
 
 # 数据库文件
 *.db
 *.sqlite
+*.sqlite3
 
-# 其他临时文件
+# 日志、临时文件
 *.log
+logs/
+
+# 系统、编辑器垃圾文件
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo

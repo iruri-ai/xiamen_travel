@@ -10,6 +10,14 @@ load_dotenv()
 LLM_TIMEOUT = 15
 LLM_MAX_RETRIES = 1
 
+BREAKFAST_START = 7 * 60
+BREAKFAST_END = 9 * 60 + 30
+LUNCH_START = 11 * 60 + 30
+LUNCH_END = 13 * 60 + 30
+DINNER_START = 17 * 60 + 30
+DINNER_END = 20 * 60
+MAX_END_TIME = 22 * 60
+
 class RecommendationService:
     def __init__(self):
         load_dotenv()
@@ -305,7 +313,18 @@ class RecommendationService:
         else:
             return [(9 * 60, 18 * 60)]
     
+    def _skip_meal_time(self, current_time):
+        if BREAKFAST_START <= current_time < BREAKFAST_END:
+            return BREAKFAST_END
+        if LUNCH_START <= current_time < LUNCH_END:
+            return LUNCH_END
+        if DINNER_START <= current_time < DINNER_END:
+            return DINNER_END
+        return current_time
+    
     def _find_next_valid_start(self, current_time, open_windows):
+        current_time = self._skip_meal_time(current_time)
+        
         for start, end in open_windows:
             if current_time < start:
                 return start
@@ -318,31 +337,41 @@ class RecommendationService:
     def _build_time_schedule(self, attraction_ids):
         schedule = []
         current_time = 9 * 60
+        order = 1
         
-        for i, aid in enumerate(attraction_ids):
+        for aid in attraction_ids:
             attr = self.attraction_data[aid]
             open_windows = self._parse_open_time(attr['open_time'])
             
             adjusted_start = self._find_next_valid_start(current_time, open_windows)
             
+            # 确保开始时间不超过最晚结束时间
+            if adjusted_start > MAX_END_TIME:
+                adjusted_start = MAX_END_TIME
+            
+            end_time = adjusted_start + attr['recommended_duration']
+            if end_time > MAX_END_TIME:
+                end_time = MAX_END_TIME
+            
             start_hour = adjusted_start // 60
             start_min = adjusted_start % 60
             start_str = f"{start_hour:02d}:{start_min:02d}"
             
-            end_time = adjusted_start + attr['recommended_duration']
             end_hour = end_time // 60
             end_min = end_time % 60
             end_str = f"{end_hour:02d}:{end_min:02d}"
             
             schedule.append({
                 'attraction_id': aid,
-                'order': i + 1,
+                'order': order,
                 'start_time': start_str,
                 'end_time': end_str,
-                'duration': attr['recommended_duration']
+                'duration': end_time - adjusted_start
             })
+            order += 1
             
             current_time = end_time + 30
+            current_time = self._skip_meal_time(current_time)
         
         return schedule
 
@@ -543,40 +572,34 @@ class RecommendationService:
             else:
                 duration_map = {'2小时': 120, '半天': 240, '全天': 480}
                 max_duration = duration_map.get(duration, 480)
-            
-            total_time = sum(self.attraction_data[aid]['recommended_duration'] for aid in id_list)
-            total_time += max(0, len(id_list) - 1) * 30
-            
-            if total_time > max_duration * 1.2:
-                print(f"LLM recommendation exceeds duration: {total_time}min > {max_duration}min, truncating")
-                
-                truncated_ids = []
-                current_total = 0
-                for aid in id_list:
-                    time_needed = self.attraction_data[aid]['recommended_duration']
-                    buffer = 30 if truncated_ids else 0
-                    if current_total + buffer + time_needed <= max_duration:
-                        if truncated_ids:
-                            current_total += buffer
-                        truncated_ids.append(aid)
-                        current_total += time_needed
-                
-                if not truncated_ids:
-                    truncated_ids = [id_list[0]]
-                
-                attraction_list = []
-                for aid in truncated_ids:
-                    attr = self.attraction_data[aid].copy()
-                    attr['recommend_reason'] = self._generate_reason_for_attraction(attr, themes, weather_info)
-                    attraction_list.append(attr)
-                
-                id_list = truncated_ids
 
             schedule = self._build_time_schedule(id_list)
+
+            # 过滤掉时长为0的无效时间安排（景点开放时间限制导致无法安排）
+            valid_schedule = [s for s in schedule if s.get('duration', 0) >= 30]
+            if len(valid_schedule) < len(schedule):
+                valid_ids = {s['attraction_id'] for s in valid_schedule}
+                id_list = [aid for aid in id_list if aid in valid_ids]
+                attraction_list = [a for a in attraction_list if a['id'] in valid_ids]
+                schedule = valid_schedule
+            
+            total_duration = sum(s.get('duration', 0) for s in schedule)
+            if len(schedule) > 1:
+                total_duration += (len(schedule) - 1) * 30
+            
+            duration_str = user_preferences.get('duration', '全天')
+            if isinstance(duration_str, int):
+                duration_map = {'2小时': 120, '半天': 240, '全天': 480}
+                for k, v in duration_map.items():
+                    if v == duration_str:
+                        duration_str = k
+                        break
             
             return {
                 'reason': result.get('reason', '基于您的偏好推荐'),
                 'attractions': attraction_list,
+                'duration': duration_str,
+                'total_minutes': total_duration,
                 'schedule': schedule,
                 'tips': result.get('tips', '祝您旅途愉快！'),
                 'source': 'llm'
@@ -630,6 +653,14 @@ class RecommendationService:
 
         schedule = self._build_time_schedule(recommended_ids)
 
+        # 过滤掉时长为0的无效时间安排
+        valid_schedule = [s for s in schedule if s.get('duration', 0) >= 30]
+        if len(valid_schedule) < len(schedule):
+            valid_ids_for_schedule = {s['attraction_id'] for s in valid_schedule}
+            recommended_ids = [aid for aid in recommended_ids if aid in valid_ids_for_schedule]
+            attraction_list = [a for a in attraction_list if a['id'] in valid_ids_for_schedule]
+            schedule = valid_schedule
+
         reason_parts = []
         if themes:
             reason_parts.append(f"根据您的「{', '.join(themes)}」偏好")
@@ -656,10 +687,21 @@ class RecommendationService:
             tips_parts.append("带儿童建议避开人流高峰")
         
         tips = "、".join(tips_parts) + "。" if tips_parts else "祝您旅途愉快！"
+        
+        total_duration = sum(s.get('duration', 0) for s in schedule)
+        if len(schedule) > 1:
+            total_duration += (len(schedule) - 1) * 30
+
+        duration_str = duration
+        if isinstance(duration_str, int):
+            duration_map_inv = {120: '2小时', 240: '半天', 480: '全天'}
+            duration_str = duration_map_inv.get(duration_str, '全天')
 
         return {
             'reason': reason,
             'attractions': attraction_list,
+            'duration': duration_str,
+            'total_minutes': total_duration,
             'schedule': schedule,
             'tips': tips,
             'source': 'rule-based'

@@ -4,6 +4,8 @@ from routes.comments import comments_bp
 from routes.favorites import favorites_bp
 from routes.routes import routes_bp
 from routes.tags import tags_bp
+from routes.auth import auth_bp
+
 
 def register_blueprints(app):
     app.register_blueprint(attractions_bp, url_prefix='/api/attractions')
@@ -12,3 +14,4 @@ def register_blueprints(app):
     app.register_blueprint(favorites_bp, url_prefix='/api/favorites')
     app.register_blueprint(routes_bp, url_prefix='/api/routes')
     app.register_blueprint(tags_bp, url_prefix='/api/tags')
+    app.register_blueprint(auth_bp, url_prefix='/api/auth')

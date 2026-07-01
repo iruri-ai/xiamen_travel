@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify, request
 import uuid
 from database import get_db_connection
+from middleware.auth import admin_required
 
 attractions_bp = Blueprint('attractions', __name__)
 
@@ -222,3 +223,172 @@ def get_areas():
             'data': None,
             'request_id': str(uuid.uuid4())
         }), 500
+
+
+@attractions_bp.route('', methods=['POST'])
+@admin_required
+def create_attraction():
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'code': 400, 'message': '请求体不能为空', 'data': None, 'request_id': str(uuid.uuid4())}), 400
+
+        name = data.get('name', '').strip()
+        if not name:
+            return jsonify({'code': 400, 'message': '景点名称不能为空', 'data': None, 'request_id': str(uuid.uuid4())}), 400
+
+        conn = get_db_connection()
+
+        existing = conn.execute('SELECT id FROM attractions WHERE name = ?', (name,)).fetchone()
+        if existing:
+            conn.close()
+            return jsonify({'code': 409, 'message': '景点名称已存在', 'data': None, 'request_id': str(uuid.uuid4())}), 409
+
+        cursor = conn.execute('INSERT INTO attractions (name, description, image_url, address, open_time, recommended_duration, rating, popularity, area, price, latitude, longitude, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\', \'localtime\'), datetime(\'now\', \'localtime\'))', (name, data.get('description', ''), data.get('image_url', ''), data.get('address', ''), data.get('open_time', ''), data.get('recommended_duration', 120), data.get('rating', 0.0), data.get('popularity', 0), data.get('area', ''), data.get('price', 0.0), data.get('latitude'), data.get('longitude')))
+
+        attraction_id = cursor.lastrowid
+
+        tags = data.get('tags', [])
+        if isinstance(tags, list):
+            for tag_name in tags:
+                tag_name = tag_name.strip()
+                if tag_name:
+                    tag = conn.execute('SELECT id FROM tags WHERE name = ?', (tag_name,)).fetchone()
+                    if not tag:
+                        tag_cursor = conn.execute('INSERT INTO tags (name) VALUES (?)', (tag_name,))
+                        tag_id = tag_cursor.lastrowid
+                    else:
+                        tag_id = tag['id']
+
+                    conn.execute('INSERT OR IGNORE INTO attraction_tags (attraction_id, tag_id) VALUES (?, ?)', (attraction_id, tag_id))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({'code': 200, 'message': '景点创建成功', 'data': {'id': attraction_id, 'name': name}, 'request_id': str(uuid.uuid4())})
+
+    except Exception as e:
+        return jsonify({'code': 500, 'message': str(e), 'data': None, 'request_id': str(uuid.uuid4())}), 500
+
+
+@attractions_bp.route('/<int:attraction_id>', methods=['PUT'])
+@admin_required
+def update_attraction(attraction_id):
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'code': 400, 'message': '请求体不能为空', 'data': None, 'request_id': str(uuid.uuid4())}), 400
+
+        conn = get_db_connection()
+
+        attraction = conn.execute('SELECT id, name FROM attractions WHERE id = ?', (attraction_id,)).fetchone()
+        if not attraction:
+            conn.close()
+            return jsonify({'code': 404, 'message': '景点不存在', 'data': None, 'request_id': str(uuid.uuid4())}), 404
+
+        if 'name' in data:
+            new_name = data['name'].strip()
+            if not new_name:
+                conn.close()
+                return jsonify({'code': 400, 'message': '景点名称不能为空', 'data': None, 'request_id': str(uuid.uuid4())}), 400
+
+            existing = conn.execute('SELECT id FROM attractions WHERE name = ? AND id != ?', (new_name, attraction_id)).fetchone()
+            if existing:
+                conn.close()
+                return jsonify({'code': 409, 'message': '景点名称已存在', 'data': None, 'request_id': str(uuid.uuid4())}), 409
+
+        updates = []
+        params = []
+
+        if 'name' in data:
+            updates.append('name = ?')
+            params.append(data['name'].strip())
+        if 'description' in data:
+            updates.append('description = ?')
+            params.append(data['description'])
+        if 'image_url' in data:
+            updates.append('image_url = ?')
+            params.append(data['image_url'])
+        if 'address' in data:
+            updates.append('address = ?')
+            params.append(data['address'])
+        if 'open_time' in data:
+            updates.append('open_time = ?')
+            params.append(data['open_time'])
+        if 'recommended_duration' in data:
+            updates.append('recommended_duration = ?')
+            params.append(data['recommended_duration'])
+        if 'rating' in data:
+            updates.append('rating = ?')
+            params.append(data['rating'])
+        if 'popularity' in data:
+            updates.append('popularity = ?')
+            params.append(data['popularity'])
+        if 'area' in data:
+            updates.append('area = ?')
+            params.append(data['area'])
+        if 'price' in data:
+            updates.append('price = ?')
+            params.append(data['price'])
+        if 'latitude' in data:
+            updates.append('latitude = ?')
+            params.append(data['latitude'])
+        if 'longitude' in data:
+            updates.append('longitude = ?')
+            params.append(data['longitude'])
+
+        updates.append("updated_at = datetime('now', 'localtime')")
+        params.append(attraction_id)
+
+        query = f'UPDATE attractions SET {", ".join(updates)} WHERE id = ?'
+        conn.execute(query, params)
+
+        if 'tags' in data:
+            conn.execute('DELETE FROM attraction_tags WHERE attraction_id = ?', (attraction_id,))
+            tags = data['tags']
+            if isinstance(tags, list):
+                for tag_name in tags:
+                    tag_name = tag_name.strip()
+                    if tag_name:
+                        tag = conn.execute('SELECT id FROM tags WHERE name = ?', (tag_name,)).fetchone()
+                        if not tag:
+                            tag_cursor = conn.execute('INSERT INTO tags (name) VALUES (?)', (tag_name,))
+                            tag_id = tag_cursor.lastrowid
+                        else:
+                            tag_id = tag['id']
+
+                        conn.execute('INSERT INTO attraction_tags (attraction_id, tag_id) VALUES (?, ?)', (attraction_id, tag_id))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({'code': 200, 'message': '景点更新成功', 'data': {'id': attraction_id}, 'request_id': str(uuid.uuid4())})
+
+    except Exception as e:
+        return jsonify({'code': 500, 'message': str(e), 'data': None, 'request_id': str(uuid.uuid4())}), 500
+
+
+@attractions_bp.route('/<int:attraction_id>', methods=['DELETE'])
+@admin_required
+def delete_attraction(attraction_id):
+    try:
+        conn = get_db_connection()
+
+        attraction = conn.execute('SELECT id, name FROM attractions WHERE id = ?', (attraction_id,)).fetchone()
+        if not attraction:
+            conn.close()
+            return jsonify({'code': 404, 'message': '景点不存在', 'data': None, 'request_id': str(uuid.uuid4())}), 404
+
+        conn.execute('DELETE FROM attraction_tags WHERE attraction_id = ?', (attraction_id,))
+        conn.execute('DELETE FROM comments WHERE attraction_id = ?', (attraction_id,))
+        conn.execute('DELETE FROM favorites WHERE attraction_id = ?', (attraction_id,))
+        conn.execute('DELETE FROM route_attractions WHERE attraction_id = ?', (attraction_id,))
+        conn.execute('DELETE FROM attractions WHERE id = ?', (attraction_id,))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({'code': 200, 'message': '景点删除成功', 'data': {'id': attraction_id}, 'request_id': str(uuid.uuid4())})
+
+    except Exception as e:
+        return jsonify({'code': 500, 'message': str(e), 'data': None, 'request_id': str(uuid.uuid4())}), 500

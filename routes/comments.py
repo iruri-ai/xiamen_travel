@@ -1,7 +1,8 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, g
 import uuid
 import re
 from database import get_db_connection
+from middleware.auth import login_required, admin_required
 
 comments_bp = Blueprint('comments', __name__)
 
@@ -151,6 +152,7 @@ def get_comments():
         }), 500
 
 @comments_bp.route('', methods=['POST'])
+@login_required
 def create_comment():
     try:
         data = request.get_json()
@@ -187,12 +189,17 @@ def create_comment():
         
         content = re.sub(r'<[^>]+>', '', data['content'].strip())
         
+        user_id = g.current_user_id
+        user = conn.execute('SELECT username, nickname FROM users WHERE id = ?', (user_id,)).fetchone()
+        username = user['nickname'] or user['username'] if user else '游客'
+        
         cursor = conn.execute('''
-            INSERT INTO comments (attraction_id, username, content, rating)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO comments (attraction_id, user_id, username, content, rating, created_at)
+            VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
         ''', (
             data['attraction_id'],
-            data.get('username', '游客').strip()[:50],
+            user_id,
+            username[:50],
             content,
             data.get('rating', 5)
         ))
@@ -217,6 +224,56 @@ def create_comment():
             'code': 200,
             'message': '评论提交成功',
             'data': formatted_comment,
+            'request_id': str(uuid.uuid4())
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'code': 500,
+            'message': str(e),
+            'data': None,
+            'request_id': str(uuid.uuid4())
+        }), 500
+
+@comments_bp.route('/<int:comment_id>', methods=['DELETE'])
+@login_required
+def delete_comment(comment_id):
+    try:
+        conn = get_db_connection()
+        
+        comment = conn.execute('SELECT * FROM comments WHERE id = ?', (comment_id,)).fetchone()
+        
+        if not comment:
+            conn.close()
+            return jsonify({
+                'code': 404,
+                'message': '评论不存在',
+                'data': None,
+                'request_id': str(uuid.uuid4())
+            }), 404
+        
+        current_user_id = g.current_user_id
+        
+        user = conn.execute('SELECT role FROM users WHERE id = ?', (current_user_id,)).fetchone()
+        is_admin = user and user['role'] in ('admin', 'super_admin')
+        
+        if comment['user_id'] != current_user_id and not is_admin:
+            conn.close()
+            return jsonify({
+                'code': 403,
+                'message': '无权删除此评论',
+                'data': None,
+                'request_id': str(uuid.uuid4())
+            }), 403
+        
+        conn.execute('DELETE FROM comments WHERE id = ?', (comment_id,))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'code': 200,
+            'message': '评论删除成功',
+            'data': None,
             'request_id': str(uuid.uuid4())
         })
         
